@@ -73,3 +73,15 @@ By default, a “hidden” `logback.xml` on the classpath configures **DEBUG**-l
 
 - See `OneRingToRuleThemAllTest.java` for a complete token-passing simulation example.
 - Review Javadoc comments in `Node.java` and `NetworkConnection.java` for detailed API guidance.
+
+## Building and Testing
+
+This project uses **Gradle**. The `build.gradle` file is configured to compile sources in `src/` and tests in `test/`.
+
+To build the project and run the test suite:
+
+```bash
+gradle test
+```
+
+Gradle will download required dependencies on the first run. Test results are printed to the console and can also be found under `build/reports/tests/`.

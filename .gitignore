@@ -30,3 +30,9 @@ bin/
 /lib
 /sim4da.log
 /sim4da-*.log
+
+# Gradle build files
+.gradle/
+build/
+
+gradle_test.log
