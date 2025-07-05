@@ -1,5 +1,10 @@
 plugins {
     id 'java'
+    id 'application'
+}
+
+application {
+    mainClass = 'org.oxoo2a.sim4da.demo.DSMInconsistencyDemo'
 }
 
 repositories {

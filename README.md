@@ -69,6 +69,14 @@ By default, a “hidden” `logback.xml` on the classpath configures **DEBUG**-l
 2. Define desired log levels, appenders, and formats.
 3. The simulator will automatically pick up your configuration instead of the default.
 
+## Running the Demo
+
+Start the DSM inconsistency demo with:
+
+```
+./gradlew run --args="CP"
+```
+
 ## Further Reading
 
 - See `OneRingToRuleThemAllTest.java` for a complete token-passing simulation example.
