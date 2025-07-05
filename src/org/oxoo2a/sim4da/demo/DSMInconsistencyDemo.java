@@ -4,6 +4,9 @@ import org.oxoo2a.sim4da.NetworkConnection;
 import org.oxoo2a.sim4da.Simulator;
 import org.oxoo2a.sim4da.dsm.*;
 
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -41,22 +44,37 @@ public class DSMInconsistencyDemo {
         private final Role role;
         private final String[] allKeys;
         private final Map<String, Integer> lastSeen = new HashMap<>();
+        private final BufferedWriter log;
 
         private int rollbackCount = 0;
         private int missingUpdateCount = 0;
         private int okCount = 0;
 
         CounterAgent(int id, DistributedSharedMemory dsm, NetworkConnection nc,
-                     Role role, String[] allKeys) {
+                     Role role, String[] allKeys, BufferedWriter log) {
             this.id = id;
             this.dsm = dsm;
             this.nc = nc;
             this.role = role;
             this.allKeys = allKeys;
+            this.log = log;
             for (String k : allKeys) {
                 lastSeen.put(k, -1);
             }
             this.nc.engage(this::run);
+        }
+
+        private void writeLog(String line) {
+            if (log == null) return;
+            synchronized (log) {
+                try {
+                    log.write(line);
+                    log.newLine();
+                    log.flush();
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
         }
 
         private void run() {
@@ -90,15 +108,24 @@ public class DSMInconsistencyDemo {
                         if (last >= 0) {
                             if (current < last) {
                                 rollbackCount++;
+                                String line = String.format("tick=%d node=%s observed=%s type=rollback from=%d to=%d",
+                                        step, key(), other, last, current);
                                 System.out.printf(RED + "[%s] Rollback for %s: %d -> %d" + RESET + "%n",
                                         key(), other, last, current);
+                                writeLog(line);
                             } else if (current > last + 1) {
                                 missingUpdateCount++;
+                                String line = String.format("tick=%d node=%s observed=%s type=missing from=%d to=%d",
+                                        step, key(), other, last, current);
                                 System.out.printf(YELLOW + "[%s] Missing update for %s: %d -> %d" + RESET + "%n",
                                         key(), other, last, current);
+                                writeLog(line);
                             } else {
                                 okCount++;
+                                String line = String.format("tick=%d node=%s observed=%s type=ok value=%d",
+                                        step, key(), other, current);
                                 System.out.printf(GREEN + "[%s] %s = %d" + RESET + "%n", key(), other, current);
+                                writeLog(line);
                             }
                         }
                         lastSeen.put(other, current);
@@ -107,14 +134,17 @@ public class DSMInconsistencyDemo {
 
                 if (id == 1) {
                     StringBuilder row = new StringBuilder();
-                    row.append("[Tick ").append(step).append("]");
+                    row.append("tick=").append(step).append(" state:");
                     for (String k : allKeys) {
                         String label = k.equals(SHARED_KEY) ? "shared" : k;
                         String val = dsm.read(k);
                         row.append(" ").append(label).append("=")
                                 .append(val == null ? "null" : val);
                     }
-                    System.out.println(row);
+                    String rowStr = row.toString();
+                    System.out.println(rowStr.replaceFirst("tick=", "[Tick ")
+                            .replaceFirst(" state:", "]"));
+                    writeLog(rowStr);
                 }
 
                 try {
@@ -124,8 +154,10 @@ public class DSMInconsistencyDemo {
                 }
             }
 
-            System.out.printf("[%s] Rollbacks: %d Missing: %d Consistent: %d%n",
+            String summary = String.format("[%s] Rollbacks: %d Missing: %d Consistent: %d",
                     key(), rollbackCount, missingUpdateCount, okCount);
+            System.out.println(summary);
+            writeLog(summary);
         }
 
         private String key() { return "n" + id; }
@@ -151,31 +183,41 @@ public class DSMInconsistencyDemo {
         String variant = args.length > 0 ? args[0] : "CA";
         Simulator sim = Simulator.getInstance();
 
-        CounterAgent[] agents = new CounterAgent[NODE_COUNT];
-        String[] keys = new String[NODE_COUNT + 1];
-        for (int i = 0; i < NODE_COUNT; i++) {
-            keys[i] = "n" + i;
+        try (BufferedWriter log = new BufferedWriter(new FileWriter("simlog.txt"))) {
+            CounterAgent[] agents = new CounterAgent[NODE_COUNT];
+            String[] keys = new String[NODE_COUNT + 1];
+            for (int i = 0; i < NODE_COUNT; i++) {
+                keys[i] = "n" + i;
+            }
+            keys[NODE_COUNT] = SHARED_KEY;
+
+            for (int i = 0; i < NODE_COUNT; i++) {
+                NetworkConnection nc = new NetworkConnection("n" + i);
+                DistributedSharedMemory dsm = createDSM(variant, nc);
+                CounterAgent.Role role;
+                if (i == 0) role = CounterAgent.Role.WRITE_ONLY;
+                else if (i == 1) role = CounterAgent.Role.READ_ONLY;
+                else role = CounterAgent.Role.READ_WRITE;
+                agents[i] = new CounterAgent(i, dsm, nc, role, keys, log);
+            }
+
+            sim.simulate(5);
+
+            int totalRollbacks = java.util.Arrays.stream(agents).mapToInt(a -> a.rollbackCount).sum();
+            int totalMissing = java.util.Arrays.stream(agents).mapToInt(a -> a.missingUpdateCount).sum();
+            int totalOk = java.util.Arrays.stream(agents).mapToInt(a -> a.okCount).sum();
+            String result = String.format("== Gesamtergebnisse ==%nRollbacks: %d, Fehlende Updates: %d, OK: %d",
+                    totalRollbacks, totalMissing, totalOk);
+            System.out.println(result);
+            synchronized (log) {
+                log.write(result);
+                log.newLine();
+                log.flush();
+            }
+
+            sim.shutdown();
+        } catch (IOException e) {
+            e.printStackTrace();
         }
-        keys[NODE_COUNT] = SHARED_KEY;
-
-        for (int i = 0; i < NODE_COUNT; i++) {
-            NetworkConnection nc = new NetworkConnection("n" + i);
-            DistributedSharedMemory dsm = createDSM(variant, nc);
-            CounterAgent.Role role;
-            if (i == 0) role = CounterAgent.Role.WRITE_ONLY;
-            else if (i == 1) role = CounterAgent.Role.READ_ONLY;
-            else role = CounterAgent.Role.READ_WRITE;
-            agents[i] = new CounterAgent(i, dsm, nc, role, keys);
-        }
-
-        sim.simulate(5);
-
-        int totalRollbacks = java.util.Arrays.stream(agents).mapToInt(a -> a.rollbackCount).sum();
-        int totalMissing = java.util.Arrays.stream(agents).mapToInt(a -> a.missingUpdateCount).sum();
-        int totalOk = java.util.Arrays.stream(agents).mapToInt(a -> a.okCount).sum();
-        System.out.printf("== Gesamtergebnisse ==%nRollbacks: %d, Fehlende Updates: %d, OK: %d%n",
-                totalRollbacks, totalMissing, totalOk);
-
-        sim.shutdown();
     }
 }
