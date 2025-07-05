@@ -173,6 +173,7 @@ public class DSMInconsistencyDemo {
         int totalRollbacks = java.util.Arrays.stream(agents).mapToInt(a -> a.rollbackCount).sum();
         int totalMissing = java.util.Arrays.stream(agents).mapToInt(a -> a.missingUpdateCount).sum();
         int totalOk = java.util.Arrays.stream(agents).mapToInt(a -> a.okCount).sum();
+        System.out.printf("== Gestartet mit DSM-Variante: %s ==%n", variant);
         System.out.printf("== Gesamtergebnisse ==%nRollbacks: %d, Fehlende Updates: %d, OK: %d%n",
                 totalRollbacks, totalMissing, totalOk);
 
