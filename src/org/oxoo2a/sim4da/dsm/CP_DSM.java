@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.HashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -20,6 +21,7 @@ public class CP_DSM implements DistributedSharedMemory {
     public CP_DSM(NetworkConnection nc) {
         this.nc = nc;
         Thread t = new Thread(this::processMessages);
+        t.setDaemon(true); // ensure background thread doesn't block JVM exit
         t.start();
     }
 
@@ -28,7 +30,8 @@ public class CP_DSM implements DistributedSharedMemory {
         int ts = clock.incrementAndGet();
         UpdateMessage msg = new UpdateMessage(key, value, ts);
         QuorumTracker tracker = new QuorumTracker();
-        nc.send(msg); // broadcast
+        QuorumTracker.notifyAck(); // count local node
+        nc.send(msg); // broadcast to others
         tracker.awaitQuorum();
         store.put(key, new ValueEntry(value, ts));
     }
@@ -37,6 +40,7 @@ public class CP_DSM implements DistributedSharedMemory {
     public String read(String key) {
         RequestMessage req = new RequestMessage(key);
         QuorumTracker tracker = new QuorumTracker();
+        QuorumTracker.notifyAck(); // count local node
         nc.send(req); // broadcast
         tracker.awaitQuorum();
         ValueEntry ve = store.get(key);
@@ -77,7 +81,6 @@ public class CP_DSM implements DistributedSharedMemory {
     private record ValueEntry(String value, int timestamp) {}
 
     private static class QuorumTracker {
-        private static final int nodes = org.oxoo2a.sim4da.Network.getInstance().numberOfNodes();
         private static final AtomicInteger received = new AtomicInteger(0);
         private static CountDownLatch latch = new CountDownLatch(required());
 
@@ -87,11 +90,14 @@ public class CP_DSM implements DistributedSharedMemory {
             }
         }
 
-        static int required() { return nodes/2 + 1; }
+        static int required() {
+            int nodes = org.oxoo2a.sim4da.Network.getInstance().numberOfNodes();
+            return nodes / 2 + 1;
+        }
 
         void awaitQuorum() {
             try {
-                latch.await();
+                latch.await(100, java.util.concurrent.TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }

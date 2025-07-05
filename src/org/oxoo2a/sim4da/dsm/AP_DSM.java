@@ -20,6 +20,7 @@ public class AP_DSM implements DistributedSharedMemory {
         this.nc = nc;
         // start background listener
         Thread t = new Thread(this::processUpdates);
+        t.setDaemon(true); // allow JVM to exit after tests
         t.start();
     }
 
