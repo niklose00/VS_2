@@ -73,3 +73,4 @@ By default, a “hidden” `logback.xml` on the classpath configures **DEBUG**-l
 
 - See `OneRingToRuleThemAllTest.java` for a complete token-passing simulation example.
 - Review Javadoc comments in `Node.java` and `NetworkConnection.java` for detailed API guidance.
+- Run `InconsistencyDemo` to observe distributed shared memory anomalies.
