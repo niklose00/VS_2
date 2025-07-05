@@ -12,82 +12,125 @@ import java.util.Map;
  * Distributed Shared Memory and reports observable inconsistencies.
  * <p>
  * The application works with all three DSM variants (CA, CP, AP). Each node
- * maintains a local counter value and writes it to the DSM. A dedicated monitor
- * node periodically reads all counters and prints anomalies such as decreasing
+ * maintains a local counter value and writes it to the DSM. All nodes
+ * periodically read every counter and report anomalies such as decreasing
  * values or missing updates.
  */
 public class DSMInconsistencyDemo {
 
     /** Number of counter nodes created for the demonstration. */
-    private static final int NODE_COUNT = 3;
+    private static final int NODE_COUNT = 5;
+
+    /** Key used for the globally shared counter */
+    private static final String SHARED_KEY = "shared_counter";
 
     /**
      * Counter node using a DSM instance to share its counter value.
      */
     static class CounterAgent {
+        enum Role { WRITE_ONLY, READ_ONLY, READ_WRITE }
+
+        private static final String RED = "\u001B[31m";
+        private static final String YELLOW = "\u001B[33m";
+        private static final String GREEN = "\u001B[32m";
+        private static final String RESET = "\u001B[0m";
+
         private final int id;
         private final DistributedSharedMemory dsm;
         private final NetworkConnection nc;
+        private final Role role;
+        private final String[] allKeys;
+        private final Map<String, Integer> lastSeen = new HashMap<>();
 
-        CounterAgent(int id, DistributedSharedMemory dsm, NetworkConnection nc) {
+        private int rollbackCount = 0;
+        private int missingUpdateCount = 0;
+        private int okCount = 0;
+
+        CounterAgent(int id, DistributedSharedMemory dsm, NetworkConnection nc,
+                     Role role, String[] allKeys) {
             this.id = id;
             this.dsm = dsm;
             this.nc = nc;
+            this.role = role;
+            this.allKeys = allKeys;
+            for (String k : allKeys) {
+                lastSeen.put(k, -1);
+            }
             this.nc.engage(this::run);
         }
 
         private void run() {
             int value = 0;
-            for (int i = 0; i < 20; i++) {
-                value++;
-                dsm.write(key(), Integer.toString(value));
-                try {
-                    Thread.sleep(50);
-                } catch (InterruptedException ignored) {}
-            }
-        }
-
-        private String key() {
-            return "n" + id;
-        }
-    }
-
-    /**
-     * Monitor node that reads all counters and prints anomalies.
-     */
-    static class MonitorAgent {
-        private final DistributedSharedMemory dsm;
-        private final NetworkConnection nc;
-        private final Map<String, Integer> lastSeen = new HashMap<>();
-
-        MonitorAgent(DistributedSharedMemory dsm, NetworkConnection nc) {
-            this.dsm = dsm;
-            this.nc = nc;
-            this.nc.engage(this::run);
-        }
-
-        private void run() {
-            for (int i = 0; i < 40; i++) {
-                for (int id = 0; id < NODE_COUNT; id++) {
-                    String key = "n" + id;
-                    String val = dsm.read(key);
-                    if (val == null) continue;
-                    int current = Integer.parseInt(val);
-                    Integer last = lastSeen.get(key);
-                    if (last != null && current < last) {
-                        System.out.printf("[Monitor] Rollback for %s: %d -> %d%n", key, last, current);
-                    } else if (last != null && current > last + 1) {
-                        System.out.printf("[Monitor] Missing updates for %s: jumped from %d to %d%n", key, last, current);
+            int sharedValue = 0;
+            for (int step = 0; step < 40; step++) {
+                if (role != Role.READ_ONLY) {
+                    if (role != Role.WRITE_ONLY) {
+                        value++;
+                        dsm.write(key(), Integer.toString(value));
                     }
-                    lastSeen.put(key, current);
+
+                    // writers update shared counter
+                    if (role == Role.WRITE_ONLY) {
+                        sharedValue++;
+                        dsm.write(SHARED_KEY, Integer.toString(sharedValue));
+                    } else {
+                        String s = dsm.read(SHARED_KEY);
+                        int sv = s == null ? 0 : Integer.parseInt(s);
+                        dsm.write(SHARED_KEY, Integer.toString(sv + 1));
+                    }
                 }
-                System.out.println("[Monitor] Current view: " + lastSeen);
+
+                if (role != Role.WRITE_ONLY) {
+                    // allowed readers check counters
+                    for (String other : allKeys) {
+                        String valStr = dsm.read(other);
+                        if (valStr == null) continue;
+                        int current = Integer.parseInt(valStr);
+                        int last = lastSeen.getOrDefault(other, -1);
+                        if (last >= 0) {
+                            if (current < last) {
+                                rollbackCount++;
+                                System.out.printf(RED + "[%s] Rollback for %s: %d -> %d" + RESET + "%n",
+                                        key(), other, last, current);
+                            } else if (current > last + 1) {
+                                missingUpdateCount++;
+                                System.out.printf(YELLOW + "[%s] Missing update for %s: %d -> %d" + RESET + "%n",
+                                        key(), other, last, current);
+                            } else {
+                                okCount++;
+                                System.out.printf(GREEN + "[%s] %s = %d" + RESET + "%n", key(), other, current);
+                            }
+                        }
+                        lastSeen.put(other, current);
+                    }
+                }
+
+                if (id == 1) {
+                    StringBuilder row = new StringBuilder();
+                    row.append("[Tick ").append(step).append("]");
+                    for (String k : allKeys) {
+                        String label = k.equals(SHARED_KEY) ? "shared" : k;
+                        String val = dsm.read(k);
+                        row.append(" ").append(label).append("=")
+                           .append(val == null ? "null" : val);
+                    }
+                    System.out.println(row);
+                }
+
                 try {
                     Thread.sleep(100);
-                } catch (InterruptedException ignored) {}
+                } catch (InterruptedException ignored) {
+                    break;
+                }
             }
+
+            System.out.printf("[%s] Rollbacks: %d Missing: %d Consistent: %d%n",
+                    key(), rollbackCount, missingUpdateCount, okCount);
         }
+
+        private String key() { return "n" + id; }
     }
+
 
     /**
      * Creates the correct DSM instance for the given variant string.
@@ -109,17 +152,30 @@ public class DSMInconsistencyDemo {
         Simulator sim = Simulator.getInstance();
 
         CounterAgent[] agents = new CounterAgent[NODE_COUNT];
+        String[] keys = new String[NODE_COUNT + 1];
+        for (int i = 0; i < NODE_COUNT; i++) {
+            keys[i] = "n" + i;
+        }
+        keys[NODE_COUNT] = SHARED_KEY;
+
         for (int i = 0; i < NODE_COUNT; i++) {
             NetworkConnection nc = new NetworkConnection("n" + i);
             DistributedSharedMemory dsm = createDSM(variant, nc);
-            agents[i] = new CounterAgent(i, dsm, nc);
+            CounterAgent.Role role;
+            if (i == 0) role = CounterAgent.Role.WRITE_ONLY;
+            else if (i == 1) role = CounterAgent.Role.READ_ONLY;
+            else role = CounterAgent.Role.READ_WRITE;
+            agents[i] = new CounterAgent(i, dsm, nc, role, keys);
         }
 
-        NetworkConnection monitorNc = new NetworkConnection("monitor");
-        DistributedSharedMemory monitorDsm = createDSM(variant, monitorNc);
-        new MonitorAgent(monitorDsm, monitorNc);
-
         sim.simulate(5);
+
+        int totalRollbacks = java.util.Arrays.stream(agents).mapToInt(a -> a.rollbackCount).sum();
+        int totalMissing = java.util.Arrays.stream(agents).mapToInt(a -> a.missingUpdateCount).sum();
+        int totalOk = java.util.Arrays.stream(agents).mapToInt(a -> a.okCount).sum();
+        System.out.printf("== Gesamtergebnisse ==%nRollbacks: %d, Fehlende Updates: %d, OK: %d%n",
+                totalRollbacks, totalMissing, totalOk);
+
         sim.shutdown();
     }
 }
