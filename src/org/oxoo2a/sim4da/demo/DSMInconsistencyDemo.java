@@ -61,44 +61,67 @@ public class DSMInconsistencyDemo {
 
         private void run() {
             int value = 0;
+            int sharedValue = 0;
             for (int step = 0; step < 40; step++) {
                 if (role != Role.READ_ONLY) {
                     if (role != Role.WRITE_ONLY) {
                         value++;
                         dsm.write(key(), Integer.toString(value));
                     }
-                    // all writers update shared counter
-                    String s = dsm.read(SHARED_KEY);
-                    int sv = s == null ? 0 : Integer.parseInt(s);
-                    dsm.write(SHARED_KEY, Integer.toString(sv + 1));
+
+                    // writers update shared counter
+                    if (role == Role.WRITE_ONLY) {
+                        sharedValue++;
+                        dsm.write(SHARED_KEY, Integer.toString(sharedValue));
+                    } else {
+                        String s = dsm.read(SHARED_KEY);
+                        int sv = s == null ? 0 : Integer.parseInt(s);
+                        dsm.write(SHARED_KEY, Integer.toString(sv + 1));
+                    }
                 }
 
-                // all agents read and check
-                for (String other : allKeys) {
-                    String valStr = dsm.read(other);
-                    if (valStr == null) continue;
-                    int current = Integer.parseInt(valStr);
-                    int last = lastSeen.getOrDefault(other, -1);
-                    if (last >= 0) {
-                        if (current < last) {
-                            rollbackCount++;
-                            System.out.printf(RED + "[%s] Rollback for %s: %d -> %d" + RESET + "%n",
-                                    key(), other, last, current);
-                        } else if (current > last + 1) {
-                            missingUpdateCount++;
-                            System.out.printf(YELLOW + "[%s] Missing update for %s: %d -> %d" + RESET + "%n",
-                                    key(), other, last, current);
-                        } else {
-                            okCount++;
-                            System.out.printf(GREEN + "[%s] %s = %d" + RESET + "%n", key(), other, current);
+                if (role != Role.WRITE_ONLY) {
+                    // allowed readers check counters
+                    for (String other : allKeys) {
+                        String valStr = dsm.read(other);
+                        if (valStr == null) continue;
+                        int current = Integer.parseInt(valStr);
+                        int last = lastSeen.getOrDefault(other, -1);
+                        if (last >= 0) {
+                            if (current < last) {
+                                rollbackCount++;
+                                System.out.printf(RED + "[%s] Rollback for %s: %d -> %d" + RESET + "%n",
+                                        key(), other, last, current);
+                            } else if (current > last + 1) {
+                                missingUpdateCount++;
+                                System.out.printf(YELLOW + "[%s] Missing update for %s: %d -> %d" + RESET + "%n",
+                                        key(), other, last, current);
+                            } else {
+                                okCount++;
+                                System.out.printf(GREEN + "[%s] %s = %d" + RESET + "%n", key(), other, current);
+                            }
                         }
+                        lastSeen.put(other, current);
                     }
-                    lastSeen.put(other, current);
+                }
+
+                if (id == 1) {
+                    StringBuilder row = new StringBuilder();
+                    row.append("[Tick ").append(step).append("]");
+                    for (String k : allKeys) {
+                        String label = k.equals(SHARED_KEY) ? "shared" : k;
+                        String val = dsm.read(k);
+                        row.append(" ").append(label).append("=")
+                           .append(val == null ? "null" : val);
+                    }
+                    System.out.println(row);
                 }
 
                 try {
                     Thread.sleep(100);
-                } catch (InterruptedException ignored) {}
+                } catch (InterruptedException ignored) {
+                    break;
+                }
             }
 
             System.out.printf("[%s] Rollbacks: %d Missing: %d Consistent: %d%n",
@@ -146,6 +169,13 @@ public class DSMInconsistencyDemo {
         }
 
         sim.simulate(5);
+
+        int totalRollbacks = java.util.Arrays.stream(agents).mapToInt(a -> a.rollbackCount).sum();
+        int totalMissing = java.util.Arrays.stream(agents).mapToInt(a -> a.missingUpdateCount).sum();
+        int totalOk = java.util.Arrays.stream(agents).mapToInt(a -> a.okCount).sum();
+        System.out.printf("== Gesamtergebnisse ==%nRollbacks: %d, Fehlende Updates: %d, OK: %d%n",
+                totalRollbacks, totalMissing, totalOk);
+
         sim.shutdown();
     }
 }
