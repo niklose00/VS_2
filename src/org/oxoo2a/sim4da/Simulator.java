@@ -26,6 +26,10 @@ public class Simulator {
         return instance;
     }
 
+    public static void reset() {
+        instance = null;
+    }
+
     public void simulate ( long duration_in_seconds ) {
         simulating = true;
         startSignal.countDown();

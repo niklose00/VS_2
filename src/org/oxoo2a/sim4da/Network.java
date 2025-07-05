@@ -7,6 +7,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentSkipListSet;
 
 public class Network {
 
@@ -16,6 +20,8 @@ public class Network {
     private record Node ( NetworkConnection nc, NodeProxy np ) {}
     private final Map<String,Node> nodes = new HashMap<>();
     private final Logger logger = LoggerFactory.getLogger(Network.class);
+    private final ConcurrentMap<String, Integer> delays = new ConcurrentHashMap<>();
+    private final Set<String> partitions = new ConcurrentSkipListSet();
     private static Network instance = null;
     public static Network getInstance() {
         if (instance == null) {
@@ -51,16 +57,20 @@ public class Network {
             logger.error("Attempt to send message to non-existent node " + receiver_name);
             throw new UnknownNodeException(receiver_name);
         }
+        if (isPartitioned(sender.NodeName()) || isPartitioned(receiver_name)) return;
         Message copy = message.copy();
         copy.setSender(sender.NodeName());
         NodeProxy receiver = nodes.get(receiver_name).np;
-        receiver.deliver(copy, sender);
+        deliverWithDelay(receiver, copy, sender, getDelay(receiver_name));
     }
 
     public void send ( Message message, NetworkConnection sender ) {
         for (Node n : nodes.values()) {
             if (n.nc != sender) {
-                n.np.deliver(message, sender);
+                if (isPartitioned(sender.NodeName()) || isPartitioned(n.nc.NodeName())) continue;
+                Message copy = message.copy();
+                copy.setSender(sender.NodeName());
+                deliverWithDelay(n.np, copy, sender, getDelay(n.nc.NodeName()));
             }
         }
     }
@@ -69,6 +79,35 @@ public class Network {
         Node n = nodes.get(receiver.NodeName());
         Message m = n.np.receive();
         return m;
+    }
+
+    private boolean isPartitioned(String node) {
+        return partitions.contains(node);
+    }
+
+    private int getDelay(String node) {
+        return delays.getOrDefault(node, 0);
+    }
+
+    private void deliverWithDelay(NodeProxy receiver, Message msg, NetworkConnection sender, int delay) {
+        if (delay <= 0) {
+            receiver.deliver(msg, sender);
+        } else {
+            new Thread(() -> {
+                try { Thread.sleep(delay); } catch (InterruptedException ignored) {}
+                receiver.deliver(msg, sender);
+            }).start();
+        }
+    }
+
+    public void setNodeDelay(String node, int delayMs) { delays.put(node, delayMs); }
+    public void clearNodeDelay(String node) { delays.remove(node); }
+    public void partitionNode(String node) { partitions.add(node); }
+    public void reconnectNode(String node) { partitions.remove(node); }
+    public void reset() {
+        nodes.clear();
+        delays.clear();
+        partitions.clear();
     }
 
     public void shutdown() {
