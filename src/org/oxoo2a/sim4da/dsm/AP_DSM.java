@@ -8,14 +8,21 @@ import java.util.HashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Availability & Partition Tolerance implementation.
- * Each node keeps local copies and propagates writes asynchronously.
+ * DSM implementation providing <strong>A</strong>vailability and
+ * <strong>P</strong>artition tolerance.  Every node maintains a local copy of
+ * the data and broadcasts updates to others.  Updates are applied
+ * asynchronously, so reads may observe stale values until gossip converges.
  */
 public class AP_DSM implements DistributedSharedMemory {
     private final NetworkConnection nc;
     private final Map<String,ValueEntry> store = new HashMap<>();
     private final AtomicLong clock = new AtomicLong(0);
 
+    /**
+     * Construct an AP_DSM bound to the given network connection.  The
+     * constructor spawns a background thread that continuously processes
+     * update messages.
+     */
     public AP_DSM(NetworkConnection nc) {
         this.nc = nc;
         // start background listener
@@ -25,6 +32,9 @@ public class AP_DSM implements DistributedSharedMemory {
     }
 
     @Override
+    /**
+     * Store the value locally and broadcast the update to all other nodes.
+     */
     public void write(String key, String value) {
         long ts = clock.incrementAndGet();
         store.put(key, new ValueEntry(value, ts));
@@ -33,11 +43,17 @@ public class AP_DSM implements DistributedSharedMemory {
     }
 
     @Override
+    /**
+     * Read the value from the local copy.  The result may be outdated while
+     * updates are still in flight.
+     */
     public String read(String key) {
         ValueEntry e = store.get(key);
         return e != null ? e.value : null;
     }
 
+    /** Background thread that merges incoming updates using a last-write-wins
+     * strategy based on timestamps. */
     private void processUpdates() {
         while (true) {
             Message m = nc.receive();

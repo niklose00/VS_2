@@ -11,13 +11,20 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Consistency & Partition Tolerance implementation using simple quorums.
+ * Implements a DSM with <strong>C</strong>onsistency and
+ * <strong>P</strong>artition tolerance.  Reads and writes coordinate with a
+ * majority of nodes to form a simple quorum.  Operations block until a quorum
+ * of acknowledgements has been received.
  */
 public class CP_DSM implements DistributedSharedMemory {
     private final NetworkConnection nc;
     private final Map<String,ValueEntry> store = new ConcurrentHashMap<>();
     private final AtomicInteger clock = new AtomicInteger(0);
 
+    /**
+     * Create a CP_DSM bound to the provided network connection. A background
+     * thread is started to handle incoming DSM messages.
+     */
     public CP_DSM(NetworkConnection nc) {
         this.nc = nc;
         Thread t = new Thread(this::processMessages);
@@ -26,6 +33,10 @@ public class CP_DSM implements DistributedSharedMemory {
     }
 
     @Override
+    /**
+     * Broadcast a write request and wait for a quorum of acknowledgements
+     * before updating the local store.
+     */
     public void write(String key, String value) {
         int ts = clock.incrementAndGet();
         UpdateMessage msg = new UpdateMessage(key, value, ts);
@@ -37,6 +48,10 @@ public class CP_DSM implements DistributedSharedMemory {
     }
 
     @Override
+    /**
+     * Query the value for {@code key}. The method waits until a quorum of
+     * nodes responds before returning the local value.
+     */
     public String read(String key) {
         RequestMessage req = new RequestMessage(key);
         QuorumTracker tracker = new QuorumTracker();
@@ -47,6 +62,7 @@ public class CP_DSM implements DistributedSharedMemory {
         return ve == null ? null : ve.value;
     }
 
+    /** Internal loop processing incoming DSM protocol messages. */
     private void processMessages() {
         while (true) {
             Message m = nc.receive();

@@ -73,3 +73,25 @@ By default, a “hidden” `logback.xml` on the classpath configures **DEBUG**-l
 
 - See `OneRingToRuleThemAllTest.java` for a complete token-passing simulation example.
 - Review Javadoc comments in `Node.java` and `NetworkConnection.java` for detailed API guidance.
+
+## Distributed Shared Memory
+
+`sim4da` contains a minimal DSM (Distributed Shared Memory) abstraction that
+allows multiple simulated nodes to share a key–value store.  The
+`DistributedSharedMemory` interface defines two operations:
+
+```java
+void write(String key, String value);
+String read(String key);
+```
+
+Three example implementations highlight the different CAP trade-offs:
+
+| Implementation | Guarantees | Description |
+| -------------- | ---------- | ----------- |
+| `CA_DSM` | Consistency & Availability | Uses a synchronous central map assuming no network partitions. |
+| `AP_DSM` | Availability & Partition Tolerance | Each node keeps a local copy and gossips updates asynchronously. Reads are always local and eventually consistent. |
+| `CP_DSM` | Consistency & Partition Tolerance | Employs simple quorum-based communication for reads and writes. Operations block until a majority of nodes acknowledge. |
+
+See the classes in `src/org/oxoo2a/sim4da/dsm` and the accompanying tests in
+`test/org/oxoo2a/sim4da/dsm` for usage examples.
